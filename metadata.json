@@ -1,0 +1,6 @@
+{
+  "name": "Viral Content Strategist",
+  "description": "Generate high-attention, click-maximizing content assets including viral video hooks, titles, captions, checklists, and retention triggers using Gemini AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
