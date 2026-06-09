@@ -182,9 +182,11 @@ IMPORTANT: Return ONLY valid JSON with no additional text.`;
         const output = await replicate.run(
           "meta/llama-2-70b-chat:02e509cc789964a986fb50860c8e887d28375db3526150c66b79e4604eb3ff3f",
           {
-            prompt: fullPrompt,
-            max_tokens: 2000,
-            temperature: 0.7,
+            input: {
+              prompt: fullPrompt,
+              max_tokens: 2000,
+              temperature: 0.7,
+            }
           }
         );
 
