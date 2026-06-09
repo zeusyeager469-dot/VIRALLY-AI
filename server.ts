@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createServer as createViteServer } from "vite";
+import Replicate from "replicate";
 
 const app = express();
 const PORT = 3000;
@@ -39,6 +40,19 @@ function getGemini(): GoogleGenAI {
   return aiClient;
 }
 
+// Lazy load Replicate for fallback
+let replicateClient: Replicate | null = null;
+function getReplicate(): Replicate {
+  if (!replicateClient) {
+    const apiKey = process.env.REPLICATE_API_TOKEN;
+    if (!apiKey) {
+      throw new Error("REPLICATE_API_TOKEN is not defined.");
+    }
+    replicateClient = new Replicate({ auth: apiKey });
+  }
+  return replicateClient;
+}
+
 // 1. Core Generation Endpoint
 app.post("/api/generate", async (req, res) => {
   try {
@@ -66,11 +80,8 @@ app.post("/api/generate", async (req, res) => {
         }
       } catch (err: any) {
         console.error("Error fetching URL:", err.message);
-        // We proceed even if URL fetch fails, making Gemini rely on its offline knowledge of the URL or the text provided in prompt
       }
     }
-
-    const ai = getGemini();
 
     // Construct prompt
     let contextPrompt = "Here is the input information provided by the user:\n";
@@ -101,68 +112,113 @@ Strictly adhere to these formatting rules inside the keys:
    - 3-5 sentences each.
    - Provide a brief, punchy flow of how the short content should unfold to maintain extreme high retention (Hook -> Re-hook -> Body -> Call to Action/Twist).
 5. "hashtags": Generate exactly 5 highly relevant hashtags, complete with '#' prefix. Use a mix of broad and niche tags.
-6. "retention_hooks": Generate exactly 5 "retention hooks" or audience triggers for the first 3 seconds of the video to maximize watch time. (e.g. "Do not skip if you...").`;
+6. "retention_hooks": Generate exactly 5 "retention hooks" or audience triggers for the first 3 seconds of the video to maximize watch time. (e.g. "Do not skip if you...").
 
-    const requestParts: any[] = [
-      { text: instructions },
-      { text: contextPrompt }
-    ];
+IMPORTANT: Return ONLY valid JSON with no additional text.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: requestParts,
-      config: {
-        tools: [{ googleSearch: {} }],
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            video_hooks: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "Array of exactly 5 high-attention viral hooks, max 12 words each."
+    // Try Gemini first
+    let parsedData = null;
+    let usedFallback = false;
+
+    try {
+      const ai = getGemini();
+      const requestParts: any[] = [
+        { text: instructions },
+        { text: contextPrompt }
+      ];
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: requestParts,
+        config: {
+          tools: [{ googleSearch: {} }],
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              video_hooks: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: "Array of exactly 5 high-attention viral hooks, max 12 words each."
+              },
+              video_titles: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: "Array of exactly 5 viral video titles, max 60 characters each."
+              },
+              captions: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: "Array of exactly 5 highly engaging single-sentence captions."
+              },
+              scripts: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: "Array of exactly 5 short content scripts or outlines."
+              },
+              hashtags: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: "Array of exactly 5 trending and relevant hashtags with '#' prefix."
+              },
+              retention_hooks: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: "Array of exactly 5 retention hooks for the first 3 seconds."
+              }
             },
-            video_titles: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "Array of exactly 5 viral video titles, max 60 characters each."
-            },
-            captions: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "Array of exactly 5 highly engaging single-sentence captions."
-            },
-            scripts: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "Array of exactly 5 short content scripts or outlines."
-            },
-            hashtags: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "Array of exactly 5 trending and relevant hashtags with '#' prefix."
-            },
-            retention_hooks: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "Array of exactly 5 retention hooks for the first 3 seconds."
-            }
+            required: ["video_hooks", "video_titles", "captions", "scripts", "hashtags", "retention_hooks"],
           },
-          required: ["video_hooks", "video_titles", "captions", "scripts", "hashtags", "retention_hooks"],
         },
-      },
-    });
+      });
 
-    const jsonText = response.text?.trim() || "{}";
-    const parsedData = JSON.parse(jsonText);
+      const jsonText = response.text?.trim() || "{}";
+      parsedData = JSON.parse(jsonText);
+      console.log("✅ Generated with Gemini");
+    } catch (geminiError: any) {
+      console.warn("⚠️ Gemini failed, attempting Replicate Llama 2 fallback:", geminiError.message);
+
+      // Check if it's a quota/rate limit error
+      if (geminiError.status === 429 || (geminiError.message && geminiError.message.includes("quota"))) {
+        console.log("🔄 Gemini quota exceeded, switching to Replicate Llama 2...");
+      }
+
+      // Fallback to Replicate Llama 2
+      try {
+        const replicate = getReplicate();
+        
+        const fullPrompt = `${instructions}\n\n${contextPrompt}\n\nRespond with ONLY valid JSON, no extra text.`;
+
+        const output = await replicate.run(
+          "meta/llama-2-70b-chat:02e509cc789964a986fb50860c8e887d28375db3526150c66b79e4604eb3ff3f",
+          {
+            prompt: fullPrompt,
+            max_tokens: 2000,
+            temperature: 0.7,
+          }
+        );
+
+        const jsonText = Array.isArray(output) ? output.join("") : String(output);
+        const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) {
+          throw new Error("Could not extract JSON from Llama 2 response");
+        }
+        parsedData = JSON.parse(jsonMatch[0]);
+        usedFallback = true;
+        console.log("✅ Generated with Replicate Llama 2 (fallback)");
+      } catch (replicateError: any) {
+        console.error("❌ Both Gemini and Replicate failed:", replicateError.message);
+        throw replicateError;
+      }
+    }
+
     res.json(parsedData);
   } catch (error: any) {
     console.error("Endpoint execution error:", error);
     
-    // Check if it's a quota/rate limit error from Gemini
     if (error.status === 429 || (error.message && error.message.includes("quota"))) {
       return res.status(429).json({ 
-        error: "API Quota Exceeded. You have hit the rate limit for the Gemini API. Please wait a moment or check your Google AI Studio plan." 
+        error: "API quota exceeded for all providers. Please wait and try again later." 
       });
     }
 
