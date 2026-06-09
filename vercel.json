@@ -2,5 +2,14 @@
   "version": 2,
   "buildCommand": "vite build",
   "outputDirectory": "dist",
-  "public": true
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ]
 }
