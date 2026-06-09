@@ -1,12 +1,15 @@
 {
+  "version": 2,
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "env": {
-    "NODE_ENV": "production"
-  },
-  "functions": {
-    "server.cjs": {
-      "runtime": "nodejs@20.x"
+  "routes": [
+    {
+      "src": "^/api(/.*)?$",
+      "dest": "/server.cjs"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
     }
-  }
+  ]
 }
