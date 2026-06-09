@@ -1,15 +1,6 @@
 {
   "version": 2,
-  "buildCommand": "npm run build",
+  "buildCommand": "vite build",
   "outputDirectory": "dist",
-  "routes": [
-    {
-      "src": "^/api(/.*)?$",
-      "dest": "/server.cjs"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/index.html"
-    }
-  ]
+  "public": true
 }
